@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GAKK records reader
 // @namespace    local.gakk.tools
-// @version      1.8.0
+// @version      1.9.0
 // @author       Arsen Gogeshvili
 // @description     Personal GAKK cabinet reader
 // @description:ru  Чтение личного кабинета ГАКК
@@ -30,7 +30,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.8.0';
+  const VERSION = '1.9.0';
   const LIST_PATH = '/l/private/ask';
   const OWNER_KEY = 'gakk_capture_owner';   // { "<account name>": "AG" } — asked accounts only
   const MAX_PAGES = 60;                     // a cap so a broken pager cannot loop forever
@@ -56,7 +56,11 @@
   // Every viewer anchor, bounded href → </a> so a label can never bleed across links.
   const ANCHOR = () => new RegExp(
     'imageViewer/show\\?objectId=(\\d+)&attributeId=(\\d+)&serial=(\\d+)&group=(\\d+)&ext=([^"\'<>]+)"([\\s\\S]*?)<\\/a>', 'g');
-  const LABEL = new RegExp('Ф\\.(' + FOND + ')\\s+Оп\\.(\\S+?)\\s+Д\\.(\\d+(?:\\s*[А-ЯЁа-яёA-Za-z])?)\\s+(\\d+[а-яёa-z]?(?:\\s*-\\s*\\d+[а-яёa-z]?)?)\\s*$');
+  /* A range part is a page or a span of pages. GAKK prints a non-contiguous range as two
+     parts separated by a period: "1-71. 72-86", "128. 129-130", "264-267.375-376". */
+  const PART = '\\d+[а-яёa-z]?(?:\\s*-\\s*\\d+[а-яёa-z]?)?';
+  const RANGE = PART + '(?:\\s*\\.\\s*' + PART + ')*\\.?';
+  const LABEL = new RegExp('Ф\\.(' + FOND + ')\\s+Оп\\.(\\S+?)\\s+Д\\.(\\d+(?:\\s*[А-ЯЁа-яёA-Za-z])?)\\s+(' + RANGE + ')\\s*$');
 
   // The cabinet labels this cell itself, so read the label rather than judging contents.
   const TITLE_CELL = () => /Шифр дела для выдачи\s*<\/div>\s*<span[^>]*>([\s\S]*?)<\/span>/g;
@@ -64,13 +68,21 @@
 
   const strip = s => s.replace(/<svg[\s\S]*?<\/svg>/g, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 
-  /* r keeps what the archive printed. s/e are for ordering only, and a shape this does
-     not recognise is reported rather than guessed at. */
+  /* r keeps what the archive printed, always. s/e are for ordering only: the first start
+     and the last end in printed order, across however many parts the cell holds. A shape
+     this does not recognise leaves s/e null and is reported rather than guessed at. */
   function parseRange(rng) {
-    const m = rng.trim().match(/^(\d+)[а-яёa-z]?(?:\s*-\s*(\d+)[а-яёa-z]?)?$/i);
-    if (!m) return [rng.trim(), null, null];
-    const s = +m[1];
-    return [rng.trim(), s, m[2] ? +m[2] : s];
+    const raw = rng.trim();
+    const parts = raw.replace(/\.\s*$/, '').split(/\s*\.\s*/).filter(Boolean);
+    let first = null, last = null;
+    for (const p of parts) {
+      const m = p.match(/^(\d+)[а-яёa-z]?(?:\s*-\s*(\d+)[а-яёa-z]?)?$/i);
+      if (!m) return [raw, null, null];
+      if (first === null) first = +m[1];
+      last = m[2] ? +m[2] : +m[1];
+    }
+    if (first === null) return [raw, null, null];
+    return [raw, first, last];
   }
 
   /* Scoped to the pagination element: other aria-setsize attributes on the page carry
